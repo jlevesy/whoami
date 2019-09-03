@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -19,6 +20,7 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+// Size units.
 const (
 	_        = iota
 	KB int64 = 1 << (10 * iota)
@@ -51,6 +53,7 @@ func main() {
 	http.HandleFunc("/", whoamiHandler)
 	http.HandleFunc("/api", apiHandler)
 	http.HandleFunc("/health", healthHandler)
+	http.HandleFunc("/auth", authHandler)
 
 	fmt.Println("Starting up on port " + port)
 
@@ -259,4 +262,73 @@ func fillContent(length int64) io.ReadSeeker {
 	}
 
 	return bytes.NewReader(b)
+}
+
+func authHandler(w http.ResponseWriter, req *http.Request) {
+	c, err := req.Cookie("whoami-cookie")
+	if err != nil {
+		authenticate(w, req)
+		return
+	}
+
+	if c.Expires.Before(time.Now()) {
+		authenticate(w, req)
+		return
+	}
+
+	grantAuthentication(w)
+}
+
+func authenticate(w http.ResponseWriter, req *http.Request) {
+	hdr := req.Header.Get("Authorization")
+	if hdr == "" {
+		failAuthentication(w)
+		return
+	}
+
+	splitHdr := strings.Split(hdr, " ")
+	if len(splitHdr) != 2 {
+		failAuthentication(w)
+		return
+	}
+
+	authScheme, authValue := splitHdr[0], splitHdr[1]
+	if authScheme != "Basic" {
+		failAuthentication(w)
+		return
+	}
+
+	value, err := base64.StdEncoding.DecodeString(authValue)
+	if err != nil {
+		failAuthentication(w)
+		return
+	}
+
+	if string(value) != "whoami:whoami" {
+		failAuthentication(w)
+		return
+	}
+
+	http.SetCookie(
+		w,
+		&http.Cookie{
+			Name:    "whoami-cookie",
+			Value:   "OK",
+			Expires: time.Now().Add(time.Minute),
+			MaxAge:  -1,
+		},
+	)
+
+	grantAuthentication(w)
+}
+
+func failAuthentication(w http.ResponseWriter) {
+	w.Header().Add("WWW-Authenticate", "Basic")
+	http.Error(w, "Forbidden", 401)
+}
+
+func grantAuthentication(w http.ResponseWriter) {
+	w.Header().Add("X-Auth-User", "whoami")
+	w.Header().Add("X-Secret", "whoami-secret")
+	w.WriteHeader(http.StatusOK)
 }
