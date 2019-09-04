@@ -2,10 +2,14 @@ package main
 
 import (
 	"bytes"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"log"
 	"net"
 	"net/http"
@@ -27,11 +31,15 @@ const (
 	TB
 )
 
-var cert string
-var key string
-var port string
+var (
+	caCert string
+	cert   string
+	key    string
+	port   string
+)
 
 func init() {
+	flag.StringVar(&caCert, "cacert", "", "give me a CA certificate")
 	flag.StringVar(&cert, "cert", "", "give me a certificate")
 	flag.StringVar(&key, "key", "", "give me a key")
 	flag.StringVar(&port, "port", "80", "give me a port number")
@@ -53,10 +61,14 @@ func main() {
 	http.HandleFunc("/health", healthHandler)
 
 	fmt.Println("Starting up on port " + port)
+	if caCert != "" && cert != "" && key != "" {
+		log.Fatal(listenAndServeMTLS(":"+port, cert, key, caCert, nil))
+	}
 
 	if len(cert) > 0 && len(key) > 0 {
 		log.Fatal(http.ListenAndServeTLS(":"+port, cert, key, nil))
 	}
+
 	log.Fatal(http.ListenAndServe(":"+port, nil))
 }
 
@@ -259,4 +271,27 @@ func fillContent(length int64) io.ReadSeeker {
 	}
 
 	return bytes.NewReader(b)
+}
+
+func listenAndServeMTLS(addr, mtlsCert, mtlsKey, mtlsCACert string, handler http.Handler) error {
+	caCertPEM, err := ioutil.ReadFile(mtlsCACert)
+	if err != nil {
+		return fmt.Errorf("Unable to load ca cert file: %v", err)
+	}
+
+	certPool := x509.NewCertPool()
+
+	if ok := certPool.AppendCertsFromPEM(caCertPEM); !ok {
+		return errors.New("Unable to append CACert to pool")
+	}
+
+	cfg := &tls.Config{
+		ClientAuth: tls.RequireAndVerifyClientCert,
+		ClientCAs:  certPool,
+	}
+
+	cfg.BuildNameToCertificate()
+
+	server := &http.Server{Addr: addr, TLSConfig: cfg, Handler: handler}
+	return server.ListenAndServeTLS(mtlsCert, mtlsKey)
 }
