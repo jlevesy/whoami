@@ -148,6 +148,15 @@ func whoamiHandler(w http.ResponseWriter, req *http.Request) {
 		}
 	}
 
+	for _, v := range req.Header.Values("X-Whoami-Set") {
+		sp := strings.SplitN(v, "=", 2)
+		if len(sp) != 2 {
+			continue
+		}
+
+		w.Header().Add(sp[0], sp[1])
+	}
+
 	hostname, _ := os.Hostname()
 	_, _ = fmt.Fprintln(w, "Hostname:", hostname)
 
